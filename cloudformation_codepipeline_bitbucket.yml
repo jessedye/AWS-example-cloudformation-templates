@@ -1,0 +1,327 @@
+Parameters:
+
+  Image:
+    Description: Image used for codebuild
+    Type: String
+    Default: aws/codebuild/standard:5.0
+
+  Environment:
+    Description: Application environment parameter
+    Type: String
+    Default: dev
+
+  Repo:
+    Description: Git Repo location e.g. (username/repo)
+    Type: String
+    Default: username/repo
+
+  Branch:
+    Description: Git Repo branch e.g. (master/dev)
+    Type: String
+    Default: develop
+
+  ApplicationName:
+    Description: CodeDeploy application name
+    Type: String
+    Default: myapp
+
+Resources:
+
+  S3ArtifactsBucket:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketName: !Sub "${ApplicationName}-${Environment}-codepipeline-artifacts-bucket"
+
+  CodeBuildRole:
+    Description: Creating service role in IAM for AWS CodeBuild
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+      Path: /
+      RoleName: !Join
+        - '-'
+        - - !Ref 'AWS::StackName'
+          - CodeBuild
+    Type: AWS::IAM::Role
+
+  CodeBuildPolicy:
+    Description: Setting IAM policy for service role for CodeBuild
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action:
+          - logs:CreateLogGroup
+          - logs:CreateLogStream
+          - logs:PutLogEvents
+          Effect: Allow
+          Resource: '*'
+        - Action:
+          - s3:PutObject
+          - s3:GetObject
+          - s3:GetObjectVersion
+          Effect: Allow
+          Resource: '*'
+        - Action:
+          - codecommit:GitPull
+          Effect: Allow
+          Resource: '*'
+        - Action:
+          - kms:GenerateDataKey*
+          - kms:Encrypt
+          - kms:Decrypt
+          Effect: Allow
+          Resource: '*'
+        - Action:
+          - ecr:GetAuthorizationToken
+          - ecr:BatchCheckLayerAvailability
+          - ecr:GetDownloadUrlForLayer
+          - ecr:BatchGetImage
+          - ecr:PutImage
+          - ecr:InitiateLayerUpload
+          - ecr:UploadLayerPart
+          - ecr:CompleteLayerUpload
+          - ecs:UpdateService
+          Effect: Allow
+          Resource: '*'
+      PolicyName: !Sub "${ApplicationName}-${Environment}-CodeBuildPolicy"
+      Roles:
+        - !Ref CodeBuildRole
+    Type: AWS::IAM::Policy
+
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    DependsOn:
+    - CodeBuildPolicy
+    Properties:
+      Description: !Sub "CodeBuild for ${ApplicationName}"
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: !Ref Image
+        Type: LINUX_CONTAINER
+        PrivilegedMode: True
+      Name: !Sub "${ApplicationName}-${Environment}-codebuild"
+      ServiceRole: !Ref 'CodeBuildRole'
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: 'buildspec.yml'
+
+  # CodeDeployApplication:
+  #   Type: AWS::CodeDeploy::Application
+  #   Properties:
+  #     ApplicationName: !Sub "${ApplicationName}-${Environment}"
+  #     #Allowed values: ECS | Lambda | Server
+  #     ComputePlatform: ECS
+
+  # CodeDeploymentGroup:
+  #   Type: AWS::CodeDeploy::DeploymentGroup
+  #   Properties: 
+  #     # AlarmConfiguration: 
+  #     #   AlarmConfiguration
+  #     ApplicationName: !Ref ApplicationName
+  #     AutoRollbackConfiguration: 
+  #       Enabled: True
+  #       Events: 
+  #         - DEPLOYMENT_FAILURE
+  #         # - DEPLOYMENT_STOP_ON_ALARM
+  #         - DEPLOYMENT_STOP_ON_REQUEST
+  #     AutoScalingGroups: 
+  #       - String
+  #     Deployment: 
+  #       Deployment
+  #     DeploymentConfigName: String
+  #     DeploymentGroupName: String
+  #     DeploymentStyle:
+  #       #Options WITHOUT_TRAFFIC_CONTROL, WITH_TRAFFIC_CONTROL
+  #       DeploymentOption: WITHOUT_TRAFFIC_CONTROL
+  #       #Options: IN_PLACE, BLUE_GREEN
+  #       DeploymentType: IN_PLACE
+  #     # Ec2TagFilters: 
+  #     #   - EC2TagFilter
+  #     # Ec2TagSet: 
+  #     #   EC2TagSet
+  #     LoadBalancerInfo: 
+  #       LoadBalancerInfo
+  #     OnPremisesInstanceTagFilters: 
+  #       - TagFilter
+  #     OnPremisesTagSet: 
+  #       OnPremisesTagSet
+  #     ServiceRoleArn: !Ref CodePipelineServiceRole
+  #     TriggerConfigurations: 
+  #       - TriggerConfig
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+                - codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        -
+          PolicyName: AWS-CodePipeline-Service-3
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - codecommit:CancelUploadArchive
+                  - codecommit:GetBranch
+                  - codecommit:GetCommit
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:UploadArchive
+                  - codecommit:GetRepository
+                Resource: '*'
+              -
+                Effect: Allow
+                Action:
+                  - codedeploy:CreateDeployment
+                  - codedeploy:GetApplicationRevision
+                  - codedeploy:GetDeployment
+                  - codedeploy:GetDeploymentConfig
+                  - codedeploy:RegisterApplicationRevision
+                Resource: '*'
+              -
+                Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource: '*'
+              -
+                Effect: Allow
+                Action:
+                  - devicefarm:ListProjects
+                  - devicefarm:ListDevicePools
+                  - devicefarm:GetRun
+                  - devicefarm:GetUpload
+                  - devicefarm:CreateUpload
+                  - devicefarm:ScheduleRun
+                Resource: '*'
+              -
+                Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                  - lambda:ListFunctions
+                Resource: '*'
+              -
+                Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource: '*'
+              -
+                Effect: Allow
+                Action:
+                  - elasticbeanstalk:*
+                  - ec2:*
+                  - elasticloadbalancing:*
+                  - autoscaling:*
+                  - cloudwatch:*
+                  - s3:*
+                  - sns:*
+                  - cloudformation:*
+                  - rds:*
+                  - sqs:*
+                  - ecs:*
+                Resource: '*'
+              -
+                Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                Resource: '*'
+              -
+                Effect: Allow
+                Action:
+                  - appconfig:StartDeployment
+                  - appconfig:GetDeployment
+                  - appconfig:StopDeployment
+                Resource: '*'
+
+  BitBucketCodeStarConnection:
+    Type: AWS::CodeStarConnections::Connection
+    Properties: 
+      ConnectionName: !Sub "Bitbucket-${ApplicationName}-${Environment}"
+      ProviderType: Bitbucket
+
+  AppPipeline: 
+    Type: AWS::CodePipeline::Pipeline
+    Properties: 
+      Name: !Sub "${ApplicationName}-${Environment}-pipeline"
+      ArtifactStore:
+        Type: S3
+        Location: !Ref S3ArtifactsBucket    
+      RoleArn: 
+        !GetAtt CodePipelineServiceRole.Arn
+      Stages: 
+        - Name: BitBucket
+          Actions:
+          - Name: Source
+            InputArtifacts: []
+            ActionTypeId:
+              Version: '1'
+              Owner: AWS
+              Category: Source
+              Provider: CodeStarSourceConnection
+            OutputArtifacts:
+              - Name: SourceArtifact
+            RunOrder: 1
+            Configuration:
+              ConnectionArn: !Ref BitBucketCodeStarConnection
+              FullRepositoryId: !Ref Repo
+              BranchName: !Ref Branch
+              OutputArtifactFormat: "CODE_ZIP"
+        - Name: Approval
+          Actions:
+          - Name: Approve
+            ActionTypeId:
+              Category: Approval
+              Owner: AWS
+              Provider: Manual
+              Version: '1'
+            Configuration:
+              CustomData: !Sub 'Do you want to approve the latest commit?'
+            RunOrder: 2
+        - Name: Build
+          Actions:
+          - Name: CodeBuild
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Provider: CodeBuild
+              Version: 1
+            Configuration:
+              ProjectName: !Ref CodeBuildProject
+            InputArtifacts:
+              - Name: SourceArtifact
+            Name: Build
+            OutputArtifacts:
+              - Name: BuildArtifact
+            RunOrder: 3
+          # - Name: Deploy App
+          # Actions: 
+          #   - 
+          #     Name: BetaAction
+          #     InputArtifacts: 
+          #       - Name: BuildArtifact
+          #     ActionTypeId: 
+          #       Category: Deploy
+          #       Owner: AWS
+          #       Version: 1
+          #       Provider: CodeDeploy
+          #     Configuration: 
+          #       ApplicationName: !Ref ApplicationName
+          #       DeploymentGroupName: !Ref BetaFleet
+          #     RunOrder: 4
+      
