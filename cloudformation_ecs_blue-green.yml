@@ -1,12 +1,32 @@
 Parameters:
-  Vpc:
-    Type: 'AWS::EC2::VPC::Id'
-  Subnet1:
-    Type: 'AWS::EC2::Subnet::Id'
-  Subnet2:
-    Type: 'AWS::EC2::Subnet::Id'
+  Environment:
+    Description: Application environment parameter (dev, prod)
+    Type: String
+    Default: dev
+
+  ApplicationName:
+    Description: Application name
+    Type: String
+    Default: myapp
+
 Transform:
   - 'AWS::CodeDeployBlueGreen'
+
+Mapping:
+  Environments:
+    dev:
+      VPC: vpc-xxxx
+      Subnets:
+        - subnet-xxx
+        - subnet-xxx
+        - subnet-xx
+    prod:
+      VPC: vpc-xxxx
+      Subnets:
+        - subnet-xxx
+        - subnet-xxx
+        - subnet-xx
+
 Hooks:
   CodeDeployBlueGreenHook:
     Properties:
@@ -18,7 +38,7 @@ Hooks:
       Applications:
         - Target:
             Type: 'AWS::ECS::Service'
-            LogicalID: ECSDemoService
+            LogicalID: ECSService
           ECSAttributes:
             TaskDefinitions:
               - BlueTaskDefinition
@@ -35,23 +55,16 @@ Hooks:
                 - ALBTargetGroupGreen
     Type: 'AWS::CodeDeploy::BlueGreen'
 Resources:
-  ExampleSecurityGroup:
+  ECSSecurityGroup:
     Type: 'AWS::EC2::SecurityGroup'
     Properties:
-      GroupDescription: Security group for ec2 access
-      VpcId: !Ref Vpc
+      GroupName: !Sub "${ApplicationName}-${Environment}-ECS-SG"
+      GroupDescription: Security group for ecs web access
+      VpcId: !FindInMap [Environments, !Ref Environment, VPC]
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 8080
-          ToPort: 8080
-          CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 22
-          ToPort: 22
           CidrIp: 0.0.0.0/0
   ALBTargetGroupBlue:
     Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
@@ -68,7 +81,7 @@ Resources:
       Protocol: HTTP
       Tags:
         - Key: Group
-          Value: Example
+          Value: ECS
       TargetType: ip
       UnhealthyThresholdCount: 4
       VpcId: !Ref Vpc
@@ -87,22 +100,20 @@ Resources:
       Protocol: HTTP
       Tags:
         - Key: Group
-          Value: Example
+          Value: ECS
       TargetType: ip
       UnhealthyThresholdCount: 4
       VpcId: !Ref Vpc
-  ExampleALB:
+  ECSALB:
     Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
     Properties:
       Scheme: internet-facing
       SecurityGroups:
-        - !Ref ExampleSecurityGroup
-      Subnets:
-        - !Ref Subnet1
-        - !Ref Subnet2
+        - !Ref ECSSecurityGroup
+      Subnets: !FindInMap [Environments, !Ref Environment, Subnets]
       Tags:
         - Key: Group
-          Value: Example
+          Value: ECS
       Type: application
       IpAddressType: ipv4
   ALBListenerProdTraffic:
@@ -114,7 +125,7 @@ Resources:
             TargetGroups:
               - TargetGroupArn: !Ref ALBTargetGroupBlue
                 Weight: 1
-      LoadBalancerArn: !Ref ExampleALB
+      LoadBalancerArn: !Ref ECSALB
       Port: 80
       Protocol: HTTP
   ALBListenerProdRule:
@@ -154,8 +165,8 @@ Resources:
         - ECSTaskExecutionRole
         - Arn
       ContainerDefinitions:
-        - Name: DemoApp
-          Image: 'nginxdemos/hello:latest'
+        - Name: App
+          Image: 'nginxs/hello:latest'
           Essential: true
           PortMappings:
             - HostPort: 80
@@ -166,45 +177,45 @@ Resources:
       NetworkMode: awsvpc
       Cpu: '256'
       Memory: '512'
-      Family: ecs-demo
-  ECSDemoCluster:
+      Family: ecs-
+  ECSCluster:
     Type: 'AWS::ECS::Cluster'
-    Properties: {}
-  ECSDemoService:
+    Properties:
+      ClusterName: !Sub "${ApplicationName}-${Environment}-ECS-Cluster"
+  ECSService:
     Type: 'AWS::ECS::Service'
     Properties:
-      Cluster: !Ref ECSDemoCluster
-      DesiredCount: 1
+      ServiceName: !Sub "${ApplicationName}-${Environment}-ECS-Service"
+      Cluster: !Ref ECSCluster
+      DesiredCount: 2
       DeploymentController:
         Type: EXTERNAL
   BlueTaskSet:
     Type: 'AWS::ECS::TaskSet'
     Properties:
-      Cluster: !Ref ECSDemoCluster
+      Cluster: !Ref ECSCluster
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsVpcConfiguration:
           AssignPublicIp: ENABLED
           SecurityGroups:
-            - !Ref ExampleSecurityGroup
-          Subnets:
-            - !Ref Subnet1
-            - !Ref Subnet2
-      PlatformVersion: 1.3.0
+            - !Ref ECSSecurityGroup
+          Subnets: !FindInMap [Environments, !Ref Environment, Subnets]
+      PlatformVersion: 1.4.0
       Scale:
         Unit: PERCENT
         Value: 1
-      Service: !Ref ECSDemoService
+      Service: !Ref ECSService
       TaskDefinition: !Ref BlueTaskDefinition
       LoadBalancers:
-        - ContainerName: DemoApp
+        - ContainerName: App
           ContainerPort: 80
           TargetGroupArn: !Ref ALBTargetGroupBlue
   PrimaryTaskSet:
     Type: 'AWS::ECS::PrimaryTaskSet'
     Properties:
-      Cluster: !Ref ECSDemoCluster
-      Service: !Ref ECSDemoService
+      Cluster: !Ref ECSCluster
+      Service: !Ref ECSService
       TaskSetId: !GetAtt 
         - BlueTaskSet
         - Id
