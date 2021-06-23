@@ -1,0 +1,636 @@
+Parameters:
+  Environment:
+    Description: Application environment parameter (dev, prod)
+    Type: String
+    Default: dev
+
+  ApplicationName:
+    Description: Application name
+    Type: String
+    Default: my-app
+
+  Image:
+    Description: Application Image tag
+    Type: String
+    Default: latest
+
+  MYSQLPASSWORD: 
+    NoEcho: true
+    Description: password
+    Type: String
+
+  DBBackupRetentionPeriod:
+    Description: 'The number of days to keep snapshots of the database.'
+    Type: Number
+    Default: 1
+
+  DBPassword:
+    NoEcho: true
+    Description: password
+    Type: String
+
+  DBUser:
+    Description: user
+    Type: String
+    Default: admin
+
+  PreferredBackupWindow:
+    Description: 'The daily time range in UTC during which you want to create automated backups.'
+    Type: String
+    Default: '06:00-07:00'
+
+  PreferredMaintenanceWindow:
+    Description: The weekly time range (in UTC) during which system maintenance can occur.
+    Type: String
+    Default: 'sun:07:00-sun:07:30'
+
+  DBEngineVersion:
+    Description: database version
+    Type: String
+    Default: 5.7.mysql_aurora.2.10.0
+  
+  DBEngine:
+    Description: database engine
+    Type: String
+    Default: aurora-mysql
+ 
+  DBEngineFamily:
+    Description: database engine
+    Type: String
+    Default: aurora-mysql5.7  
+
+  DBName:
+    Description: database name
+    Type: String
+    Default: myDB
+
+
+Mappings:
+  Environments:
+    dev:
+      VPC: vpc-xxx
+      Subnets:
+        - subnet-xx
+        - subnet-xx
+        - subnet-xx
+      HostedZone: xx
+      FrontEndSSLCert: xx
+      FrontEndHostName: xx
+      DatabaseDNSRecord: xx
+    qa:
+      VPC: vpc-xxx
+      Subnets:
+        - subnet-xx
+        - subnet-xx
+        - subnet-xx
+      HostedZone: xx
+      FrontEndSSLCert: xx
+      FrontEndHostName: xx
+      DatabaseDNSRecord: xx
+    prod:
+      VPC: vpc-xxx
+      Subnets:
+        - subnet-xx
+        - subnet-xx
+        - subnet-xx
+      HostedZone: xx
+      FrontEndSSLCert: xx
+      FrontEndHostName: xx
+      DatabaseDNSRecord: xx
+
+Resources:
+
+  AppRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${ApplicationName}-${Environment}-Repo"
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+            {
+              "rulePriority": 1,
+              "description": "Only keep 3 images",
+              "selection": {
+                "tagStatus": "any",
+                "countType": "imageCountMoreThan",
+                "countNumber": 3
+              },
+              "action": { "type": "expire" }
+            }]
+          }
+
+  ECSSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupName: !Sub "${ApplicationName}-${Environment}-ECS-SG"
+      GroupDescription: Security group for ecs web access
+      VpcId: !FindInMap [Environments, !Ref Environment, VPC]
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  ALBTargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      HealthCheckIntervalSeconds: 15
+      HealthCheckPath: /server/healthcheck
+      HealthCheckPort: '80'
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 4
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: '200'
+      Port: 80
+      Protocol: HTTP
+      Tags:
+        - Key: Group
+          Value: ECS
+      TargetType: ip
+      UnhealthyThresholdCount: 4
+      VpcId: !FindInMap [Environments, !Ref Environment, VPC]
+
+  ECSALB:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref ECSSecurityGroup
+      Subnets: !FindInMap [Environments, !Ref Environment, Subnets]
+      Tags:
+        - Key: Group
+          Value: ECS
+      Type: application
+      IpAddressType: ipv4
+
+  HTTPListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      DefaultActions:
+        - RedirectConfig:
+            Host: '#{host}'
+            Path: '/#{path}'
+            Port: '443'
+            Protocol: HTTPS
+            StatusCode: HTTP_302
+          Type: redirect
+      LoadBalancerArn: !Ref ECSALB
+      Port: 80
+      Protocol: "HTTP"
+
+
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ECSALB
+      Port: 443
+      Protocol: HTTPS
+      Certificates:
+        - CertificateArn: !FindInMap [Environments, !Ref Environment, BackendSSLCert]
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  ALBListenerdRule:
+    Type: 'AWS::ElasticLoadBalancingV2::ListenerRule'
+    Properties:
+      Actions:
+        - Type: forward
+          ForwardConfig:
+            TargetGroups:
+              - TargetGroupArn: !Ref ALBTargetGroup
+                Weight: 1
+      Conditions:
+        - Field: http-header
+          HttpHeaderConfig:
+            HttpHeaderName: User-Agent
+            Values:
+              - Mozilla
+      ListenerArn: !Ref HTTPSListener
+      Priority: 1
+
+  ECSTaskExecutionRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+
+  TaskDefinition:
+    Type: 'AWS::ECS::TaskDefinition'
+    Properties:
+      ExecutionRoleArn: !GetAtt 
+        - ECSTaskExecutionRole
+        - Arn
+      ContainerDefinitions:
+        - Name: !Sub "${ApplicationName}-${Environment}-Container"
+          Image: !Sub ${AppRepo.RepositoryUri}:${Image}
+          # Image: httpd:2.4
+          Essential: true
+          PortMappings:
+            - HostPort: 80
+              Protocol: tcp
+              ContainerPort: 80
+          Environment:
+            - Name: MYSQLPASSWORD
+              Value: !Ref MYSQLPASSWORD
+      RequiresCompatibilities:
+        - FARGATE
+      NetworkMode: awsvpc
+      Cpu: '256'
+      Memory: '512'
+      Family: !Sub "${ApplicationName}-${Environment}-Task"
+
+  ECSCluster:
+    Type: 'AWS::ECS::Cluster'
+    Properties:
+      ClusterName: !Sub "${ApplicationName}-${Environment}-ECS-Cluster"
+
+  ECSService:
+    DependsOn:
+      - HTTPListener
+      - HTTPSListener
+    Type: 'AWS::ECS::Service'
+    Properties:
+      ServiceName: !Sub "${ApplicationName}-${Environment}-ECS-Service"
+      Cluster: !Ref ECSCluster
+      DesiredCount: 2
+      LaunchType: FARGATE
+      DeploymentController:
+        Type: ECS
+      LoadBalancers:
+        - ContainerName: !Sub "${ApplicationName}-${Environment}-Container"
+          ContainerPort: 80
+          TargetGroupArn: !Ref ALBTargetGroup
+      TaskDefinition: !Ref TaskDefinition
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups: 
+            - !Ref ECSSecurityGroup
+          Subnets: !FindInMap [Environments, !Ref Environment, Subnets] 
+
+  FrontEndDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !FindInMap [Environments, !Ref Environment, HostedZone] 
+      Name: !FindInMap [Environments, !Ref Environment, FrontEndDNSRecord]
+      ResourceRecords:
+        - !GetAtt CloudFrontDistribution.DomainName
+      TTL: 30
+      Type: CNAME
+
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Aliases:
+          - !FindInMap [Environments, !Ref Environment, FrontEndHostName]
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - PATCH
+            - POST
+            - DELETE
+          ViewerProtocolPolicy: redirect-to-https
+          CachePolicyId: !Ref CloudFrontCachePolicy
+          ViewerProtocolPolicy: https-only
+          TargetOriginId: !Sub "${ApplicationName}-${Environment}-FrontEnd"
+        Enabled: true
+        HttpVersion: 'http2'
+        DefaultRootObject: 'index.php'
+        IPV6Enabled: true
+        Origins:
+          - DomainName: !GetAtt 'ECSALB.DNSName'
+            Id: !Ref 'ECSALB'
+            CustomOriginConfig:
+              HTTPPort: '80'
+              HTTPSPort: '443'
+              OriginProtocolPolicy: !Ref 'OriginProtocolPolicy'
+              OriginKeepaliveTimeout: !Ref 'OriginKeepaliveTimeout'
+              OriginReadTimeout: !Ref 'OriginReadTimeout'
+              OriginSSLProtocols:
+                - TLSv1
+                - TLSv1.1
+                - TLSv1.2
+                - SSLv3
+        PriceClass: 'PriceClass_100'
+        ViewerCertificate:
+          AcmCertificateArn: !FindInMap [Environments, !Ref Environment, FrontEndSSLCert]
+          MinimumProtocolVersion: 'TLSv1.2_2019'
+          SslSupportMethod: 'sni-only'
+        Restrictions:
+          GeoRestriction: 
+            Locations: 
+              - US
+            RestrictionType: whitelist
+
+  CloudFrontOriginAccessIdentity:
+    Type: AWS::CloudFront::CloudFrontOriginAccessIdentity
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: !FindInMap [Environments, !Ref Environment, FrontEndHostName]
+          
+  CloudFrontCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties: 
+      CachePolicyConfig:
+        Name: !Sub "${ApplicationName}-${Environment}-CloudFrontCachePolicy"
+        DefaultTTL: 0
+        MaxTTL: 300
+        MinTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: all
+          EnableAcceptEncodingBrotli: true
+          EnableAcceptEncodingGzip: true
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers:
+              - User-Agent
+          QueryStringsConfig:
+            QueryStringBehavior: all
+
+  FrontEndDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !FindInMap [Environments, !Ref Environment, HostedZone] 
+      Name: !FindInMap [Environments, !Ref Environment, FrontEndHostName]
+      ResourceRecords:
+        - !GetAtt CloudFrontDistribution.DomainName
+      TTL: 30
+      Type: CNAME
+
+##Database
+
+  DBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub "${ApplicationName}-${Environment}-DB-SG"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3306
+        ToPort: 3306
+        SourceSecurityGroupId: !Ref ECSSecurityGroup
+      VpcId: !FindInMap [Environments, !Ref Environment, VPC]
+
+  DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: !Sub "${ApplicationName}-${Environment}-DB-SubnetGroup"
+      SubnetIds: !FindInMap [Environments, !Ref Environment, Subnets]
+
+  DBClusterParameterGroup:
+    Type: 'AWS::RDS::DBClusterParameterGroup'
+    Properties:
+      Description: !Ref 'AWS::StackName'
+      Family: !Ref DBEngineFamily
+      Parameters:
+        character_set_client: utf8
+        character_set_connection: utf8
+        character_set_database: utf8
+        character_set_filesystem: utf8
+        character_set_results: utf8
+        character_set_server: utf8
+        collation_connection: utf8_general_ci
+        collation_server: utf8_general_ci
+      Tags: 
+        - Key: Name
+          Value: !Sub "${ApplicationName}-${Environment}-DB-ParameterGroup"
+
+  DBCluster:
+    DeletionPolicy: Snapshot # default
+    UpdateReplacePolicy: Snapshot
+    Type: 'AWS::RDS::DBCluster'
+    Properties:
+      BackupRetentionPeriod: !Ref DBBackupRetentionPeriod
+      DatabaseName: !Ref DBName
+      DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      Engine: !Ref DBEngine
+      EngineMode: serverless
+      ScalingConfiguration:
+        AutoPause: true
+        MaxCapacity: 3
+        MinCapacity: 1
+        SecondsUntilAutoPause: 600
+      EngineVersion: !Ref DBEngineVersion
+      # KmsKeyId: !If [HasKmsKeyAndNotDBSnapshotIdentifier, {'Fn::ImportValue': !Sub '${ParentKmsKeyStack}-KeyId'}, !Ref 'AWS::NoValue']
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      Port: 3306
+      PreferredBackupWindow: !Ref PreferredBackupWindow
+      PreferredMaintenanceWindow: !Ref PreferredMaintenanceWindow
+      VpcSecurityGroupIds:
+      - !Ref DBSecurityGroup
+##Database
+
+  DBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub "${ApplicationName}-${Environment}-DB-SG"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3306
+        ToPort: 3306
+        SourceSecurityGroupId: !Ref ECSSecurityGroup
+      VpcId: !FindInMap [Environments, !Ref Environment, VPC]
+
+  DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: !Sub "${ApplicationName}-${Environment}-DB-SubnetGroup"
+      SubnetIds: !FindInMap [Environments, !Ref Environment, Subnets]
+
+  DBClusterParameterGroup:
+    Type: 'AWS::RDS::DBClusterParameterGroup'
+    Properties:
+      Description: !Ref 'AWS::StackName'
+      Family: !Ref DBEngineFamily
+      Parameters:
+        character_set_client: utf8
+        character_set_connection: utf8
+        character_set_database: utf8
+        character_set_filesystem: utf8
+        character_set_results: utf8
+        character_set_server: utf8
+        collation_connection: utf8_general_ci
+        collation_server: utf8_general_ci
+      Tags: 
+        - Key: Name
+          Value: !Sub "${ApplicationName}-${Environment}-DB-ParameterGroup"
+
+  DBCluster:
+    DeletionPolicy: Snapshot # default
+    UpdateReplacePolicy: Snapshot
+    Type: 'AWS::RDS::DBCluster'
+    Properties:
+      BackupRetentionPeriod: !Ref DBBackupRetentionPeriod
+      DatabaseName: !Ref DBName
+      DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      Engine: !Ref DBEngine
+      EngineMode: serverless
+      ScalingConfiguration:
+        AutoPause: true
+        MaxCapacity: 16
+        MinCapacity: 1
+        SecondsUntilAutoPause: 600
+      EngineVersion: !Ref DBEngineVersion
+      # KmsKeyId: !If [HasKmsKeyAndNotDBSnapshotIdentifier, {'Fn::ImportValue': !Sub '${ParentKmsKeyStack}-KeyId'}, !Ref 'AWS::NoValue']
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      Port: 3306
+      PreferredBackupWindow: !Ref PreferredBackupWindow
+      PreferredMaintenanceWindow: !Ref PreferredMaintenanceWindow
+      VpcSecurityGroupIds:
+      - !Ref DBSecurityGroup
+##Database
+
+  DBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub "${ApplicationName}-${Environment}-DB-SG"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3306
+        ToPort: 3306
+        SourceSecurityGroupId: !Ref ECSSecurityGroup
+      VpcId: !FindInMap [Environments, !Ref Environment, VPC]
+
+  DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: !Sub "${ApplicationName}-${Environment}-DB-SubnetGroup"
+      SubnetIds: !FindInMap [Environments, !Ref Environment, Subnets]
+
+  DBClusterParameterGroup:
+    Type: 'AWS::RDS::DBClusterParameterGroup'
+    Properties:
+      Description: !Ref 'AWS::StackName'
+      Family: !Ref DBEngineFamily
+      Parameters:
+        character_set_client: utf8
+        character_set_connection: utf8
+        character_set_database: utf8
+        character_set_filesystem: utf8
+        character_set_results: utf8
+        character_set_server: utf8
+        collation_connection: utf8_general_ci
+        collation_server: utf8_general_ci
+      Tags: 
+        - Key: Name
+          Value: !Sub "${ApplicationName}-${Environment}-DB-ParameterGroup"
+
+  DBCluster:
+    DeletionPolicy: Snapshot # default
+    UpdateReplacePolicy: Snapshot
+    Type: 'AWS::RDS::DBCluster'
+    Properties:
+      BackupRetentionPeriod: !Ref DBBackupRetentionPeriod
+      DatabaseName: !Ref DBName
+      DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      Engine: !Ref DBEngine
+      EngineMode: serverless
+      ScalingConfiguration:
+        AutoPause: true
+        MaxCapacity: 16
+        MinCapacity: 1
+        SecondsUntilAutoPause: 600
+      EngineVersion: !Ref DBEngineVersion
+      # KmsKeyId: !If [HasKmsKeyAndNotDBSnapshotIdentifier, {'Fn::ImportValue': !Sub '${ParentKmsKeyStack}-KeyId'}, !Ref 'AWS::NoValue']
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      Port: 3306
+      PreferredBackupWindow: !Ref PreferredBackupWindow
+      PreferredMaintenanceWindow: !Ref PreferredMaintenanceWindow
+      VpcSecurityGroupIds:
+      - !Ref DBSecurityGroup
+##Database
+
+  DBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: !Sub "${ApplicationName}-${Environment}-DB-SG"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3306
+        ToPort: 3306
+        SourceSecurityGroupId: !Ref ECSSecurityGroup
+      VpcId: !FindInMap [Environments, !Ref Environment, VPC]
+
+  DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: !Sub "${ApplicationName}-${Environment}-DB-SubnetGroup"
+      SubnetIds: !FindInMap [Environments, !Ref Environment, Subnets]
+
+  DBClusterParameterGroup:
+    Type: 'AWS::RDS::DBClusterParameterGroup'
+    Properties:
+      Description: !Ref 'AWS::StackName'
+      Family: !Ref DBEngineFamily
+      Parameters:
+        character_set_client: utf8
+        character_set_connection: utf8
+        character_set_database: utf8
+        character_set_filesystem: utf8
+        character_set_results: utf8
+        character_set_server: utf8
+        collation_connection: utf8_general_ci
+        collation_server: utf8_general_ci
+      Tags: 
+        - Key: Name
+          Value: !Sub "${ApplicationName}-${Environment}-DB-ParameterGroup"
+
+  DBCluster:
+    DeletionPolicy: Snapshot # default
+    UpdateReplacePolicy: Snapshot
+    Type: 'AWS::RDS::DBCluster'
+    Properties:
+      BackupRetentionPeriod: !Ref DBBackupRetentionPeriod
+      DatabaseName: !Ref DBName
+      DBClusterParameterGroupName: !Ref DBClusterParameterGroup
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      Engine: !Ref DBEngine
+      EngineMode: serverless
+      ScalingConfiguration:
+        AutoPause: true
+        MaxCapacity: 3
+        MinCapacity: 1
+        SecondsUntilAutoPause: 600
+      EngineVersion: !Ref DBEngineVersion
+      MasterUsername: !Ref DBUser
+      MasterUserPassword: !Ref DBPassword
+      Port: 3306
+      PreferredBackupWindow: !Ref PreferredBackupWindow
+      PreferredMaintenanceWindow: !Ref PreferredMaintenanceWindow
+      VpcSecurityGroupIds:
+      - !Ref DBSecurityGroup
+
+  DatabaseDNSRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !FindInMap [Environments, !Ref Environment, HostedZone] 
+      Name: !FindInMap [Environments, !Ref Environment, DatabaseDNSRecord]
+      ResourceRecords:
+        - !GetAtt CloudFrontDistribution.DomainName
+      TTL: 30
+      Type: CNAME
