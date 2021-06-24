@@ -1,6 +1,4 @@
-# Author: Jesse Dye Cloud Transformation Team
-# Purpose: The purpose of this script is to check IAM users permissions and move them to groups.
-Description: AWS Lambda - audits IAM user permissions and moves them to groups.
+Description: Example Lambda function
 Parameters:
   S3ObjectVersion:
     Description: The Version ID of the s3 object.  Used for programmatically identifying code changes.
