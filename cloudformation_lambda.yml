@@ -4,7 +4,6 @@ Parameters:
     Description: The Version ID of the s3 object.  Used for programmatically identifying code changes.
     Type: String
 Resources:
-#create lambda no tags function
   AWSLambda:
     Type: AWS::Lambda::Function
     Properties: 
@@ -24,7 +23,6 @@ Resources:
           Key: "xxx"
           Value: "xxxxxx"
 
-#create cloudwatch event rule to be mapped later
   CloudWatchEventAPI:
     Type: AWS::Events::Rule
     DependsOn: AWSLambda
@@ -49,7 +47,6 @@ Resources:
           Arn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:LambdaFunction"
           Id: LambdaFunction
 
-#maps cloudwatch api rule to lambda
   PermissionForEventsToInvokeLambdaAPI: 
     Type: AWS::Lambda::Permission
     DependsOn: CloudWatchEventAPI
@@ -60,7 +57,6 @@ Resources:
       SourceArn: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/LambdaFunction_API_Rule"
 
 
-#maps cloudwatch cron rule to lambda
   CloudWatchEventCron: 
     Type: AWS::Events::Rule
     DependsOn: AWSLambda
@@ -73,7 +69,6 @@ Resources:
           Id: LambdaFunction
       Name: "LambdaFunction_Cron_Rule"
 
-#maps cloudwatch cron rule to lambda
   PermissionForEventsToInvokeLambdaCron: 
     Type: AWS::Lambda::Permission
     DependsOn: CloudWatchEventCron
