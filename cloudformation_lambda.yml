@@ -1,0 +1,86 @@
+# Author: Jesse Dye Cloud Transformation Team
+# Purpose: The purpose of this script is to check IAM users permissions and move them to groups.
+Description: AWS Lambda - audits IAM user permissions and moves them to groups.
+Parameters:
+  S3ObjectVersion:
+    Description: The Version ID of the s3 object.  Used for programmatically identifying code changes.
+    Type: String
+Resources:
+#create lambda no tags function
+  AWSLambda:
+    Type: AWS::Lambda::Function
+    Properties: 
+      Code:
+        S3Bucket: "xxx"
+        S3Key: "lambda.zip"
+        S3ObjectVersion: !Ref S3ObjectVersion
+      Description: "Lambda Function"
+      FunctionName: "LambdaFunction"
+      Handler: "lambda_iam_user_groups_checker.lambda_handler"
+      MemorySize: 128
+      Role: !Sub "arn:aws:iam::${AWS::AccountId}:role/Role"
+      Runtime: "python3.8"
+      Timeout: 120
+      Tags:
+        -
+          Key: "xxx"
+          Value: "xxxxxx"
+
+#create cloudwatch event rule to be mapped later
+  CloudWatchEventAPI:
+    Type: AWS::Events::Rule
+    DependsOn: AWSLambda
+    Properties: 
+      Description: "This rule is triggered when the iam API is triggered."
+      EventPattern:
+        source:
+          - aws.iam
+        detail-type:
+          - 'AWS API Call via CloudTrail'
+        detail:
+          eventSource:
+            - iam.amazonaws.com
+          eventName:
+            - CreateUser
+            - AttachUserPolicy
+            - PutUserPolicy
+      Name: "LambdaFunction_API_Rule"
+      State: "ENABLED"
+      Targets:
+        - 
+          Arn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:LambdaFunction"
+          Id: LambdaFunction
+
+#maps cloudwatch api rule to lambda
+  PermissionForEventsToInvokeLambdaAPI: 
+    Type: AWS::Lambda::Permission
+    DependsOn: CloudWatchEventAPI
+    Properties: 
+      FunctionName: "LambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/LambdaFunction_API_Rule"
+
+
+#maps cloudwatch cron rule to lambda
+  CloudWatchEventCron: 
+    Type: AWS::Events::Rule
+    DependsOn: AWSLambda
+    Properties: 
+      ScheduleExpression: cron(0 */6 * * ? *) #when the event should trigger
+      State: "ENABLED"
+      Targets:
+        - 
+          Arn: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:LambdaFunction"
+          Id: LambdaFunction
+      Name: "LambdaFunction_Cron_Rule"
+
+#maps cloudwatch cron rule to lambda
+  PermissionForEventsToInvokeLambdaCron: 
+    Type: AWS::Lambda::Permission
+    DependsOn: CloudWatchEventCron
+    Properties: 
+      FunctionName: "LambdaFunction"
+      Action: "lambda:InvokeFunction"
+      Principal: "events.amazonaws.com"
+      SourceArn: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/LambdaFunction_Cron_Rule"      
