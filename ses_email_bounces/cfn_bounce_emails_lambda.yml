@@ -52,14 +52,14 @@ Mappings:
 
   Environments:
     dev:
-      VPC: vpc-002d2f2e3f65cc1f9
+      VPC: vpc-xxx
       Subnets:
-        - subnet-0ef30187a88b6d6e0
-        - subnet-060ff28e89e35105a
-        - subnet-07841c4736f927b9b
+        - subnet-xxx
+        - subnet-xxx
+        - subnet-xxx
       DBSecurityGroups:
-        - sg-0da687a0260d64d21
-        - sg-0bfc41e0c7334963e
+        - sg-xxx
+        - sg-xxx
 
 Resources:
 
