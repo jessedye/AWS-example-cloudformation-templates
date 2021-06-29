@@ -1,0 +1,253 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Parameters:
+
+  Environment:
+    Type: String
+    Description: 'environment variable'
+    Default: dev
+
+  FunctionName:
+    Type: String
+    Description: 'Name of Lambda'
+    Default: SESBounceNotificationsLambda
+
+  SNSTopicName:
+    Type: String
+    Description: 'Name of SNS Topic'
+    Default: SNSBounceNotificationsLambda
+
+
+  DBHost:
+    Type: String
+    Description: 'DB Host'
+    Default: xx
+
+  DBUser:
+    Type: String
+    Description: 'DB user'
+    Default: xx
+
+  DBPass:
+    Type: String
+    Description: 'DB pass'
+    NoEcho: True
+
+  DBPort:
+    Type: String
+    Description: 'DB port'
+    Default: 3306
+
+  DBDatabase:
+    Type: String
+    Description: 'DB database'
+    Default: xx
+
+  DBTimeout:
+    Type: String
+    Description: 'DB timeout'
+    Default: 15
+
+Mappings:
+
+  Environments:
+    dev:
+      VPC: vpc-002d2f2e3f65cc1f9
+      Subnets:
+        - subnet-0ef30187a88b6d6e0
+        - subnet-060ff28e89e35105a
+        - subnet-07841c4736f927b9b
+      DBSecurityGroups:
+        - sg-0da687a0260d64d21
+        - sg-0bfc41e0c7334963e
+
+Resources:
+
+  LambdaSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+        GroupDescription: Allow lambda outbound ports
+        VpcId: !FindInMap [Environments, !Ref Environment, VPC]
+        SecurityGroupEgress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  SNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: !Ref SNSTopicName
+      TopicName: !Ref SNSTopicName
+
+  SNSSubscription:
+    DependsOn:
+      - LambdaFunction
+    Type: 'AWS::SNS::Subscription'
+    Properties:
+      Endpoint: !GetAtt LambdaFunction.Arn
+      Protocol: lambda
+      TopicArn: !Ref SNSTopic
+
+  LambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+
+  LambdaRolePolicies:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: LambdaPolicy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: cloudwatch
+          Action:
+          - logs:CreateLogGroup
+          - logs:CreateLogStream
+          - logs:PutLogEvents
+          - logs:GetLogEvents
+          Effect: Allow
+          Resource: arn:aws:logs:*:*:*
+        - Sid: lambdavpc
+          Action:
+            - ec2:CreateNetworkInterface
+            - ec2:DescribeNetworkInterfaces
+            - ec2:DeleteNetworkInterface
+            - ec2:DescribeSeccurityGroups
+            - ec2:DescribeSubnets
+            - ec2:DescribeVpcs
+          Effect: Allow
+          Resource: '*'
+      Roles:
+        - !Ref LambdaFunctionRole
+
+  LambdaFunction:
+    DependsOn:
+      - LambdaRolePolicies
+    Type: AWS::Lambda::Function
+    Properties:
+      Description: 'Lambda for SES notification parsing'
+      Handler: index.handler
+      Role: !GetAtt LambdaFunctionRole.Arn
+      FunctionName: !Ref FunctionName
+      Code:
+        ZipFile:
+          Fn::Sub: |
+            import boto3
+            import json
+            import re
+            import logging
+            import os
+            import sys
+            import pymysql
+
+            # Setting up logging
+            logger = logging.getLogger()
+            logger.setLevel(logging.DEBUG)
+            # main function
+            def handler(event, context):
+
+              emails = []
+              addemails = []
+              #excluded email
+              exemail = ['devtestemail@occrra.org', 'system@occrra.org']
+              try:
+                event = str(event)
+                logger.debug(f"Event: {event}")
+                eventemails = re.findall("([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)", event)
+                if eventemails:
+                  for eventemail in eventemails:
+                    logger.debug(f"Event Email: {eventemail}")
+                    eventemail = str(eventemail)
+                    eventemail = eventemail.replace("['", "")
+                    eventemail = eventemail.replace("']", "")
+                    logger.debug(f"Event Formatted Email: {eventemail}")
+                    emails.append(eventemail)
+
+                  #remove duplicates
+                  emails = list(dict.fromkeys(emails))
+                  for exclude in exemail:
+                    if exclude in emails:
+                      logger.debug(f"Removing excluded email: {exclude}")
+                      emails.remove(exclude)
+                    
+                  logger.debug(f"Event emails found: {str(emails)}")
+
+              except:
+                logger.error(f"Event emails not found")
+
+              try:
+                con = pymysql.connect(
+                  host="${DBHost}",
+                  user="${DBUser}", 
+                  password="${DBPass}",
+                  database="${DBDatabase}",
+                  port=${DBPort},
+                  connect_timeout=${DBTimeout}
+                )
+                logger.debug(f"Connection: {con}")
+                cur = con.cursor()
+              except pymysql.MySQLError as e:
+                logger.error("ERROR: Unexpected error: Could not connect to MySQL instance.")
+                logger.error(e)
+                sys.exit()
+
+              try:
+                for email in emails:
+                  logger.debug(f"Checking if email: {email} already exists in blacklist...")
+                  selquery='SELECT * FROM email_blacklist WHERE email=%s;'
+                  cur.execute(selquery, email)
+                  checkrow = cur.fetchone()
+                  if checkrow == None:
+                    logger.info(f"{email} not found, adding")
+                    addemails.append(email)
+                  else:
+                    logger.info(f"{email} already exists, skipping!")
+              except:
+                logger.error(f"Unable to do lookup on database..")
+
+              try:
+                for addemail in addemails:
+                  logger.debug(f'Adding to email {addemail} to database')
+                  addquery='INSERT INTO email_blacklist (email, blocked) VALUES (%s, 1);'
+                  cur.execute(addquery, addemail)
+                  con.commit()
+              except:
+                logger.error(f"Unable to add record to database")
+
+              try:
+                con.close()
+              except:
+                logger.error(f"Error closing connection to database")  
+      Runtime: python3.8
+      Timeout: '60'
+      VpcConfig:
+        SubnetIds: !FindInMap [Environments, !Ref Environment, Subnets]
+        SecurityGroupIds:
+          - !Ref LambdaSG
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref SNSTopic
