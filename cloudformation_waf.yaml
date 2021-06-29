@@ -1,0 +1,168 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creates an AWS WAF configuration that protects against common attacks
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Web ACL Name for Common Attack Protection
+        Parameters:
+          - WebACLName
+    ParameterLabels:
+      WebACLName:
+        default: Name
+Parameters:
+  WebACLName:
+    Type: String
+    Default: CommonAttackProtection
+    Description: >-
+      Enter the name you want to use for the WebACL. This value is also added as
+      a prefix for the names of the rules, conditions, and CloudWatch metrics
+      created by this template.
+Resources:
+  MyWebACL:
+    Properties:
+      Name: !Ref WebACLName
+      DefaultAction:
+        Type: ALLOW
+      MetricName: !Ref WebACLName
+      Rules:
+        - Action:
+            Type: BLOCK
+          Priority: 1
+          RuleId: !Ref ManualIPBlockRule
+        - Action:
+            Type: COUNT
+          Priority: 2
+          RuleId: !Ref SizeMatchRule
+        - Action:
+            Type: BLOCK
+          Priority: 3
+          RuleId: !Ref SqliRule
+        - Action:
+            Type: BLOCK
+          Priority: 4
+          RuleId: !Ref XssRule
+    Type: 'AWS::WAFRegional::WebACL'
+  SqliRule:
+    Properties:
+      Name: !Join 
+        - ''
+        - - !Ref WebACLName
+          - SqliRule
+      MetricName: !Join 
+        - ''
+        - - !Ref WebACLName
+          - SqliRule
+      Predicates:
+        - DataId: !Ref SqliMatchSet
+          Negated: false
+          Type: SqlInjectionMatch
+    Type: 'AWS::WAFRegional::Rule'
+  XssRule:
+    Properties:
+      Name: !Join 
+        - ''
+        - - !Ref WebACLName
+          - XssRule
+      MetricName: !Join 
+        - ''
+        - - !Ref WebACLName
+          - XssRule
+      Predicates:
+        - DataId: !Ref XssMatchSet
+          Negated: false
+          Type: XssMatch
+    Type: 'AWS::WAFRegional::Rule'
+  SizeMatchRule:
+    Properties:
+      Name: !Join 
+        - ''
+        - - !Ref WebACLName
+          - LargeBodyMatchRule
+      MetricName: !Join 
+        - ''
+        - - !Ref WebACLName
+          - DetectLargeBody
+      Predicates:
+        - DataId: !Ref SizeMatchSet
+          Negated: false
+          Type: SizeConstraint
+    Type: 'AWS::WAFRegional::Rule'
+  ManualIPBlockRule:
+    Properties:
+      Name: !Join 
+        - ''
+        - - !Ref WebACLName
+          - ManualIPBlockRule
+      MetricName: !Join 
+        - ''
+        - - !Ref WebACLName
+          - ManualIPBlockRule
+      Predicates:
+        - DataId: !Ref WAFManualIPBlockSet
+          Negated: false
+          Type: IPMatch
+    Type: 'AWS::WAFRegional::Rule'
+  WAFManualIPBlockSet:
+    Properties:
+      Name: Manual IP Block Set
+    Type: 'AWS::WAFRegional::IPSet'
+  SizeMatchSet:
+    Properties:
+      Name: !Join 
+        - ''
+        - - !Ref WebACLName
+          - LargeBodyMatch
+      SizeConstraints:
+        - FieldToMatch:
+            Type: BODY
+          ComparisonOperator: GT
+          Size: '8192'
+          TextTransformation: NONE
+    Type: 'AWS::WAFRegional::SizeConstraintSet'
+  SqliMatchSet:
+    Properties:
+      Name: !Join 
+        - ''
+        - - !Ref WebACLName
+          - SqliMatch
+      SqlInjectionMatchTuples:
+        - FieldToMatch:
+            Type: QUERY_STRING
+          TextTransformation: URL_DECODE
+        - FieldToMatch:
+            Type: QUERY_STRING
+          TextTransformation: HTML_ENTITY_DECODE
+        - FieldToMatch:
+            Type: BODY
+          TextTransformation: URL_DECODE
+        - FieldToMatch:
+            Type: BODY
+          TextTransformation: HTML_ENTITY_DECODE
+        - FieldToMatch:
+            Type: URI
+          TextTransformation: URL_DECODE
+    Type: 'AWS::WAFRegional::SqlInjectionMatchSet'
+  XssMatchSet:
+    Properties:
+      Name: !Join 
+        - ''
+        - - !Ref WebACLName
+          - XssMatch
+      XssMatchTuples:
+        - FieldToMatch:
+            Type: QUERY_STRING
+          TextTransformation: URL_DECODE
+        - FieldToMatch:
+            Type: QUERY_STRING
+          TextTransformation: HTML_ENTITY_DECODE
+        - FieldToMatch:
+            Type: BODY
+          TextTransformation: URL_DECODE
+        - FieldToMatch:
+            Type: BODY
+          TextTransformation: HTML_ENTITY_DECODE
+        - FieldToMatch:
+            Type: URI
+          TextTransformation: URL_DECODE
+    Type: 'AWS::WAFRegional::XssMatchSet'
