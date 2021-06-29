@@ -168,7 +168,7 @@ Resources:
               emails = []
               addemails = []
               #excluded email
-              exemail = ['devtestemail@occrra.org', 'system@occrra.org']
+              exemail = ['exclude1@email.com', 'exclude2@email.com']
               try:
                 event = str(event)
                 logger.debug(f"Event: {event}")
