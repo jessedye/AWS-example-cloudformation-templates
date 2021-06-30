@@ -32,10 +32,11 @@ def handler(event, context):
       #remove duplicates
       emails = list(dict.fromkeys(emails))
       for exclude in exemail:
-        if exclude in emails:
-          logger.debug(f"Removing excluded email: {exclude}")
-          emails.remove(exclude)
-        
+        for email in emails
+          if exclude in email:
+            logger.debug(f"Removing excluded email: {exclude}")
+            emails.remove(exclude)
+       
       logger.debug(f"Event emails found: {str(emails)}")
 
   except:
