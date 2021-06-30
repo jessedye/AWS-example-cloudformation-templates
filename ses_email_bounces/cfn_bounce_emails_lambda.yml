@@ -185,24 +185,26 @@ Resources:
                   #remove duplicates
                   emails = list(dict.fromkeys(emails))
                   for exclude in exemail:
+                    logger.debug(f"Inspecting: {exclude}")
                     for email in emails:
-                      if exclude in email:
+                      logger.debug(f"Comparing: {exclude} to {email}")
+                      if str(exclude) in str(email):
                         logger.debug(f"Removing excluded email: {email}")
                         emails.remove(email)
                   
-                  logger.debug(f"Event emails found: {str(emails)}")
+                  logger.info(f"Event emails found: {str(emails)}")
 
               except:
                 logger.error(f"Event emails not found")
 
               try:
                 con = pymysql.connect(
-                  host="xxxx",
-                  user="xxx", 
-                  password="XXXXXX",
-                  database="xxx",
-                  port=3306,
-                  connect_timeout=30
+                  host="${DBHost}",
+                  user="${DBUser}", 
+                  password="${DBPass}",
+                  database="${DBDatabase}",
+                  port=${DBPort},
+                  connect_timeout=${DBTimeout}
                 )
                 logger.debug(f"Connection: {con}")
                 cur = con.cursor()
@@ -211,8 +213,8 @@ Resources:
                 logger.error(e)
                 sys.exit()
 
-              try:
-                for email in emails:
+              for email in emails:
+                try:
                   logger.debug(f"Checking if email: {email} already exists in blacklist...")
                   selquery='SELECT * FROM email_blacklist WHERE email=%s;'
                   cur.execute(selquery, email)
@@ -222,22 +224,26 @@ Resources:
                     addemails.append(email)
                   else:
                     logger.info(f"{email} already exists, skipping!")
-              except:
-                logger.error(f"Unable to do lookup on database..")
+                except:
+                  logger.error(f"Unable to perform lookup in database for {email}")
 
-              try:
-                for addemail in addemails:
-                  logger.debug(f'Adding to email {addemail} to database')
+              for addemail in addemails:
+                try:
+                  logger.info(f'Adding to email {addemail} to database')
                   addquery='INSERT INTO email_blacklist (email, blocked) VALUES (%s, 1);'
                   cur.execute(addquery, addemail)
                   con.commit()
-              except:
-                logger.error(f"Unable to add record to database")
+                except:
+                  logger.error(f"Failed to add {addemail} to blacklist")
+                else:
+                  logger.info(f"Successfully added {addemail} to blacklist")
 
               try:
                 con.close()
+              else:
+                logger.debug(f"Closed database connection")
               except:
-                logger.error(f"Error closing connection to database")    
+                logger.error(f"Error closing connection to database")  
       Runtime: python3.8
       Timeout: '60'
       VpcConfig:
