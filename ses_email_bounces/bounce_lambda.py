@@ -34,8 +34,8 @@ def handler(event, context):
       for exclude in exemail:
         for email in emails:
           if exclude in email:
-            logger.debug(f"Removing excluded email: {exclude}")
-            emails.remove(exclude)
+            logger.debug(f"Removing excluded email: {email}")
+            emails.remove(email)
        
       logger.debug(f"Event emails found: {str(emails)}")
 
