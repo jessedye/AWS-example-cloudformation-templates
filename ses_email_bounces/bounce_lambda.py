@@ -15,7 +15,7 @@ def handler(event, context):
   emails = []
   addemails = []
   #excluded email
-  exemail = ['exclude1@email.com', 'exclude2@email.com']
+  exemail = ['example@email.com', 'example@email.com', '@mydomain.com']
   try:
     event = str(event)
     logger.debug(f"Event: {event}")
@@ -28,21 +28,28 @@ def handler(event, context):
         eventemail = eventemail.replace("']", "")
         logger.debug(f"Event Formatted Email: {eventemail}")
         emails.append(eventemail)
-
-      #remove duplicates
-      emails = list(dict.fromkeys(emails))
-      for exclude in exemail:
-        logger.debug(f"Inspecting: {exclude}")
-        for email in emails:
-          logger.debug(f"Comparing: {exclude} to {email}")
-          if str(exclude) in str(email):
-            logger.debug(f"Removing excluded email: {email}")
-            emails.remove(email)
-       
-      logger.info(f"Event emails found: {str(emails)}")
-
   except:
     logger.error(f"Event emails not found")
+
+  #remove duplicates
+  emails = set(emails)
+  #remove excluded emails and domains
+  logger.debug(f"Emails after remove duplicates: {emails}")
+  checkemails = emails.copy()
+  for email in checkemails:
+    logger.debug(f"Inspecting: {email}")
+    for exclude in exemail:
+      logger.debug(f"Comparing: {exclude} to {email}")
+      if str(exclude) in str(email):
+        logger.debug(f"Removing excluded email: {email}")
+        try:
+          emails.remove(email)
+        except:
+          logger.error(f"Could not remove email {email}")
+        else:
+          logger.debug(f"Removed {email} from list due to exclusion")
+          break
+  logger.debug(f"Event emails found: {str(emails)}")
 
   try:
     con = pymysql.connect(
@@ -87,7 +94,7 @@ def handler(event, context):
 
   try:
     con.close()
-  else:
-    logger.debug(f"Closed database connection")
   except:
     logger.error(f"Error closing connection to database")
+  else:
+    logger.debug(f"Closed database connection")
