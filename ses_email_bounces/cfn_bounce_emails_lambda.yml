@@ -139,6 +139,7 @@ Resources:
       Roles:
         - !Ref LambdaFunctionRole
 
+
   LambdaFunction:
     DependsOn:
       - LambdaRolePolicies
@@ -168,89 +169,127 @@ Resources:
               emails = []
               addemails = []
               #excluded email
-              exemail = ['devtestemail@occrra.org', 'system@occrra.org', '@occrra.org']
-              try:
-                event = str(event)
-                logger.debug(f"Event: {event}")
-                eventemails = re.findall("([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)", event)
-                if eventemails:
-                  for eventemail in eventemails:
-                    logger.debug(f"Event Email: {eventemail}")
-                    eventemail = str(eventemail)
-                    eventemail = eventemail.replace("['", "")
-                    eventemail = eventemail.replace("']", "")
-                    logger.debug(f"Event Formatted Email: {eventemail}")
-                    emails.append(eventemail)
-              except:
-                logger.error(f"Event emails not found")
+              exemail = ['example@email.org', 'example2@email.org', '@email.org]
+              #set default blacklist to True
+              blacklist = True
 
-              #remove duplicates
-              emails = set(emails)
-              #remove excluded emails and domains
-              logger.debug(f"Emails after remove duplicates: {emails}")
-              checkemails = emails.copy()
-              for email in checkemails:
-                logger.debug(f"Inspecting: {email}")
-                for exclude in exemail:
-                  logger.debug(f"Comparing: {exclude} to {email}")
-                  if str(exclude) in str(email):
-                    logger.debug(f"Removing excluded email: {email}")
-                    try:
-                      emails.remove(email)
-                    except:
-                      logger.error(f"Could not remove email {email}")
+              try:
+                message = event['Records'][0]['Sns']['Message']
+                messagejson = json.loads(message)
+                bouncetype = str(messagejson['bounce']['bounceType'])
+                logger.debug(f"Bounce Type: {bouncetype}")
+                if(bouncetype == "Permanent"):
+                  logger.info(f"Bounce Type is Permanent, adding to blacklist.")
+                  blacklist = True
+                if(bouncetype == "Transient"):
+                  logger.info(f"Bounce Type is Transient, ignoring.")
+                  blacklist = False
+                if(bouncetype == "Undetermined"):
+                  logger.info(f"Bounce Type is Undetermined, ignoring.")
+                  blacklist = False
+              except:
+                logger.debug(f"Did not retrieve bounce type")
+
+              try:
+                message = event['Records'][0]['Sns']['Message']
+                messagejson = json.loads(message)
+                complainttype = str(messagejson['complaint']['complaintFeedbackType'])
+                logger.debug(f"Complaint Type: {complainttype}")
+                if complainttype:
+                  logger.info(f"Complaint Type is {complainttype}, adding to blacklist.")
+                  blacklist = True
+              except:
+                logger.debug(f"Did not complaint bounce type")    
+
+              if blacklist:
+
+                logger.debug(f"Blacklist is true, beginning parsing")
+
+                try:
+                  event = str(event)
+                  logger.debug(f"Event: {event}")
+                  eventemails = re.findall("([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)", event)
+                  if eventemails:
+                    for eventemail in eventemails:
+                      logger.debug(f"Event Email: {eventemail}")
+                      eventemail = str(eventemail)
+                      eventemail = eventemail.replace("['", "")
+                      eventemail = eventemail.replace("']", "")
+                      logger.debug(f"Event Formatted Email: {eventemail}")
+                      emails.append(eventemail)
+                except:
+                  logger.error(f"Event emails not found")
+
+                #remove duplicates
+                emails = set(emails)
+                #remove excluded emails and domains
+                logger.debug(f"Emails after remove duplicates: {emails}")
+                checkemails = emails.copy()
+                for email in checkemails:
+                  logger.debug(f"Inspecting: {email}")
+                  for exclude in exemail:
+                    logger.debug(f"Comparing: {exclude} to {email}")
+                    if str(exclude) in str(email):
+                      logger.debug(f"Removing excluded email: {email}")
+                      try:
+                        emails.remove(email)
+                      except:
+                        logger.error(f"Could not remove email {email}")
+                      else:
+                        logger.debug(f"Removed {email} from list due to exclusion")
+                        break
+                logger.debug(f"Event emails found: {str(emails)}")
+
+                try:
+                  con = pymysql.connect(
+                    host="${DBHost}",
+                    user="${DBUser}", 
+                    password="${DBPass}",
+                    database="${DBDatabase}",
+                    port=${DBPort},
+                    connect_timeout=${DBTimeout}
+                  )
+                  logger.debug(f"Connection: {con}")
+                  cur = con.cursor()
+                except pymysql.MySQLError as e:
+                  logger.error("ERROR: Unexpected error: Could not connect to MySQL instance.")
+                  logger.error(e)
+                  sys.exit()
+
+                for email in emails:
+                  try:
+                    logger.debug(f"Checking if email: {email} already exists in blacklist...")
+                    selquery='SELECT * FROM email_blacklist WHERE email=%s;'
+                    cur.execute(selquery, email)
+                    checkrow = cur.fetchone()
+                    if checkrow == None:
+                      logger.info(f"{email} not found, adding")
+                      addemails.append(email)
                     else:
-                      logger.debug(f"Removed {email} from list due to exclusion")
-                      break
-              logger.debug(f"Event emails found: {str(emails)}")
+                      logger.info(f"{email} already exists, skipping!")
+                  except:
+                    logger.error(f"Unable to perform lookup in database for {email}")
 
-              try:
-                con = pymysql.connect(
-                  host="${DBHost}",
-                  user="${DBUser}", 
-                  password="${DBPass}",
-                  database="${DBDatabase}",
-                  port=${DBPort},
-                  connect_timeout=${DBTimeout}
-                )
-                logger.debug(f"Connection: {con}")
-                cur = con.cursor()
-              except pymysql.MySQLError as e:
-                logger.error("ERROR: Unexpected error: Could not connect to MySQL instance.")
-                logger.error(e)
-                sys.exit()
-
-              for email in emails:
-                try:
-                  logger.debug(f"Checking if email: {email} already exists in blacklist...")
-                  selquery='SELECT * FROM email_blacklist WHERE email=%s;'
-                  cur.execute(selquery, email)
-                  checkrow = cur.fetchone()
-                  if checkrow == None:
-                    logger.info(f"{email} not found, adding")
-                    addemails.append(email)
+                for addemail in addemails:
+                  try:
+                    logger.info(f'Adding to email {addemail} to database')
+                    addquery='INSERT INTO email_blacklist (email, blocked) VALUES (%s, 1);'
+                    cur.execute(addquery, addemail)
+                    con.commit()
+                  except:
+                    logger.error(f"Failed to add {addemail} to blacklist")
                   else:
-                    logger.info(f"{email} already exists, skipping!")
-                except:
-                  logger.error(f"Unable to perform lookup in database for {email}")
+                    logger.info(f"Successfully added {addemail} to blacklist")
 
-              for addemail in addemails:
                 try:
-                  logger.info(f'Adding to email {addemail} to database')
-                  addquery='INSERT INTO email_blacklist (email, blocked) VALUES (%s, 1);'
-                  cur.execute(addquery, addemail)
-                  con.commit()
+                  con.close()
                 except:
-                  logger.error(f"Failed to add {addemail} to blacklist")
+                  logger.error(f"Error closing connection to database")
                 else:
-                  logger.info(f"Successfully added {addemail} to blacklist")
-
-              try:
-                con.close()
-              except:
-                logger.error(f"Error closing connection to database")
+                  logger.debug(f"Closed database connection")
+              
               else:
-                logger.debug(f"Closed database connection")
+                logger.debug(f"Blacklist is false, ignoring...")
       Runtime: python3.8
       Timeout: '60'
       VpcConfig:
